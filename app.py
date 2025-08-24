@@ -4,6 +4,7 @@ import json
 import shutil
 import datetime as dt
 import subprocess
+import re
 from flask import Flask, request, render_template_string, Response, send_from_directory, jsonify
 
 # === CONFIGS ===
@@ -88,12 +89,43 @@ def read_git_paths_list():
         out.append(os.path.normpath(p))
     return out
 
+def cpu_count_safe():
+    try:
+        return max(1, os.cpu_count() or 1)
+    except Exception:
+        return 1
+
+def ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
+
+def unique_path(dirpath: str, filename: str) -> str:
+    """Retourne un chemin non-collisant : filename, filename_1, filename_2, ..."""
+    base, ext = os.path.splitext(filename)
+    cand = os.path.join(dirpath, filename)
+    i = 1
+    while os.path.exists(cand):
+        cand = os.path.join(dirpath, f"{base}_{i}{ext}")
+        i += 1
+    return cand
+
+HYPEROPT_LOSSES = [
+    ("ShortTradeDurHyperOptLoss", "ShortTradeDurHyperOptLoss", "Favorise profits avec durée de trade courte."),
+    ("OnlyProfitHyperOptLoss", "OnlyProfitHyperOptLoss", "Optimise uniquement le profit brut."),
+    ("SharpeHyperOptLoss", "SharpeHyperOptLoss", "Maximise le ratio de Sharpe (rendement/volatilité)."),
+    ("SharpeHyperOptLossDaily", "SharpeHyperOptLossDaily", "Sharpe calculé sur rendements journaliers."),
+    ("SortinoHyperOptLoss", "SortinoHyperOptLoss", "Comme Sharpe, pénalise seulement la baisse."),
+    ("SortinoHyperOptLossDaily", "SortinoHyperOptLossDaily", "Sortino basé sur rendements journaliers."),
+    ("CalmarHyperOptLoss", "CalmarHyperOptLoss", "Rendement / max drawdown."),
+    ("MaxDrawDownHyperOptLoss", "MaxDrawDownHyperOptLoss", "Minimise le drawdown maximal absolu."),
+    ("MaxDrawDownRelativeHyperOptLoss", "MaxDrawDownRelativeHyperOptLoss", "Minimise le drawdown relatif."),
+    ("MaxDrawDownPerPairHyperOptLoss", "MaxDrawDownPerPairHyperOptLoss", "Réduit le MDD par paire."),
+    ("ProfitDrawDownHyperOptLoss", "ProfitDrawDownHyperOptLoss", "Équilibre profit et drawdown."),
+    ("MultiMetricHyperOptLoss", "MultiMetricHyperOptLoss", "Combine plusieurs métriques (profit/risque)."),
+]
+
 # ---------- pair_whitelist robuste ----------
 def read_pair_whitelist_from_exchange_config():
-    """
-    Renvoie la liste des paires depuis PROJECT_DIR/user_data/configs/config_exchange.json,
-    qu'elle soit dans pairlists[StaticPairList], à la racine, ou plus profond.
-    """
+    """Renvoie la liste des paires depuis config_exchange.json (profond ou non)."""
     path = EXCHANGE_CONFIG_PATH
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -140,7 +172,7 @@ def read_pair_whitelist_from_exchange_config():
     return []
 
 # ---------- Build commandes ----------
-def build_cmd(action, strategy, start_ymd, *, end_ymd=None, timeframe=None, epochs=None, spaces=None, erase=False):
+def build_cmd(action, strategy, start_ymd, *, end_ymd=None, timeframe=None, epochs=None, spaces=None, erase=False, hyperopt_loss=None, job_workers=None):
     py = find_python_exe()
     base = [py, "-m", "freqtrade"]
     cfg  = ["--config", os.path.relpath(BASE_CONFIG_FOR_CMD, PROJECT_DIR)]
@@ -166,13 +198,21 @@ def build_cmd(action, strategy, start_ymd, *, end_ymd=None, timeframe=None, epoc
         ]
 
     if action == "hyperopt":
+        tr = f"{start_ymd}-{end_ymd}" if end_ymd else f"{start_ymd}-"
         cmd = base + ["hyperopt"] + cfg + [
             "--strategy", strategy,
             "--timeframe", "3m",
             "--epochs", str(epochs if epochs is not None else 100),
-            "--hyperopt-loss", "OnlyProfitHyperOptLoss",
-            "--timerange", f"{start_ymd}-"
+            "--hyperopt-loss", hyperopt_loss or "OnlyProfitHyperOptLoss",
+            "--timerange", tr
         ]
+        if job_workers:
+            try:
+                jw = int(job_workers)
+                if jw > 0:
+                    cmd += ["--job-workers", str(jw)]
+            except Exception:
+                pass
         if spaces:
             if len(spaces) == 1 and spaces[0].lower() == "all":
                 cmd += ["--spaces", "all"]
@@ -182,6 +222,7 @@ def build_cmd(action, strategy, start_ymd, *, end_ymd=None, timeframe=None, epoc
                 filtered = [s for s in spaces if s.lower() != "default"]
                 if filtered:
                     cmd += ["--spaces"] + filtered
+        # (Optionnel) verbeux pour plus de ticks : cmd += ["--verbosity", "3"]
         return cmd
 
     if action == "apply_strategy":
@@ -213,6 +254,7 @@ def index():
 
     git_paths_list = read_git_paths_list()
     pair_count = len(read_pair_whitelist_from_exchange_config())
+    nb_cpu = cpu_count_safe()
 
     html = """
 <!doctype html>
@@ -339,7 +381,7 @@ def index():
     <h2>Backtest</h2>
     <div class="row" style="justify-content:space-between; gap:12px">
       <div class="inline flex-grow">
-        <label for="bt_json_sel">Fichier .json (user_data/strategies)</label>
+        <label for="bt_json_sel">Fichier .json <!-- (user_data/strategies) --></label>
         <select id="bt_json_sel" class="flex-grow" style="min-width:400px">
           <option value="">— Utiliser le {strategy}.json courant —</option>
           {% for jf in json_files %}
@@ -363,12 +405,34 @@ def index():
   <!-- Hyperopt -->
   <div class="card">
     <h2>Hyperopt</h2>
+  <!-- Ligne 1 : Epochs, Loss, Job workers, Bouton -->
     <div class="row" style="gap:24px; align-items:center">
       <div class="inline">
         <label for="epochs">Epochs (défaut 100)</label>
         <input id="epochs" type="number" min="1" step="1" value="100" />
+        <div class="muted" style="margin-top:6px">Itérations (plus = plus long)</div>
       </div>
 
+      <div class="inline">
+        <label for="hyperoptloss">Hyperopt loss</label>
+        <select id="hyperoptloss" style="min-width:320px"></select>
+        <div id="lossDesc" class="muted" style="margin-top:6px"></div>
+      </div>
+
+      <div class="inline">
+        <label for="jobworkers">Job workers (CPU)</label>
+        <select id="jobworkers"></select>
+        <div class="muted" style="margin-top:6px">Processus parallèles (défaut : max)</div>
+      </div>
+
+      <div class="inline" style="align-items:flex-start">
+        <label style="visibility:hidden">Action</label>
+        <button id="btn-hyperopt" class="primary" onclick="startHyperopt()">Lancer Hyperopt</button>
+      </div>
+    </div>
+
+    <!-- Ligne 2 : Spaces -->
+    <div class="row" style="gap:24px; margin-top:10px">
       <div class="inline" style="flex:1">
         <label>Spaces</label>
         <div class="spaces-wrap" id="spacesWrap">
@@ -383,11 +447,12 @@ def index():
           <label><input type="checkbox" name="spaces" value="default" checked> default</label>
         </div>
       </div>
+    </div>
 
-      <div class="inline" style="align-items:flex-start">
-        <label style="visibility:hidden">Action</label>
-        <button id="btn-hyperopt" class="primary" onclick="startHyperopt()">Lancer Hyperopt</button>
-      </div>
+    <!-- Progress Hyperopt -->
+    <div style="margin-top:10px">
+      <div class="progress"><div id="hoptProgressBar"></div></div>
+      <div id="hoptProgressText" class="muted" style="margin-top:6px">0 / 0 (0%)</div>
     </div>
   </div>
 
@@ -396,7 +461,7 @@ def index():
     <h2>Apply Strategy Hyperopt</h2>
     <div class="row" style="justify-content:space-between; gap:12px">
       <div class="inline flex-grow">
-        <label for="apply_json_sel">Fichier .json (user_data/strategies)</label>
+        <label for="apply_json_sel">Fichier .json <!-- (user_data/strategies) --></label>
         <select id="apply_json_sel" class="flex-grow" style="min-width:400px">
           {% for jf in json_files_apply %}
             <option value="{{jf}}">{{jf}}</option>
@@ -463,8 +528,9 @@ def index():
 
 <script>
   const sources = {};
+  const LOSS_ITEMS = {{ loss_items_json|safe }};
+  const NB_CPU = {{ nb_cpu }};
 
-  // === Grisage croisé ===
   function setDisabled(el, disabled){ if(!el) return; el.disabled = !!disabled; }
   function lockFor(action){
     const btnBT      = document.getElementById('btn-backtest');
@@ -483,7 +549,6 @@ def index():
     setDisabled(btnBT, false); setDisabled(btnBTBear, false); setDisabled(btnHopt, false);
   }
 
-  // === Divers UI ===
   function toYMD(dstr){ if(!dstr) return ""; const [y,m,d]=dstr.split("-"); return `${y}${m}${d}`; }
   function openLogs(){ window.open('/logs/', '_blank'); }
   function appendColored(outEl, cls, text){
@@ -495,7 +560,17 @@ def index():
     outEl.scrollTop = outEl.scrollHeight;
   }
 
-  // === Hyperopt Spaces rules ===
+  function setBarProgress(barId, textId, current, total){
+    const bar = document.getElementById(barId);
+    const txt = document.getElementById(textId);
+    const pct = total > 0 ? Math.min(100, Math.floor(100*current/total)) : 0;
+    if (bar) bar.style.width = pct + "%";
+    if (txt) txt.textContent = `${current} / ${total} (${pct}%)`;
+  }
+  function resetHyperoptProgress(total){
+    setBarProgress('hoptProgressBar', 'hoptProgressText', 0, total || 0);
+  }
+
   function applySpacesRules(){
     const boxes = Array.from(document.querySelectorAll("input[name='spaces']"));
     if (!boxes.length) return;
@@ -513,7 +588,6 @@ def index():
       boxes.forEach(b => { if (b !== allBox){ b.checked = false; setDis(b, true); } else setDis(b, false); });
       return;
     }
-
     if (defBox && defBox.checked){
       boxes.forEach(b => {
         if (b.value === "default"){ setDis(b, false); }
@@ -522,13 +596,40 @@ def index():
       });
       return;
     }
-
     boxes.forEach(b => setDis(b, false));
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     applySpacesRules();
     document.querySelectorAll("input[name='spaces']").forEach(b => b.addEventListener("change", applySpacesRules));
+
+    const lossSel = document.getElementById('hyperoptloss');
+    const lossDesc = document.getElementById('lossDesc');
+    if (lossSel){
+      LOSS_ITEMS.forEach(it => {
+        const opt = document.createElement('option');
+        opt.value = it.value; opt.textContent = it.label; opt.title = it.desc;
+        lossSel.appendChild(opt);
+      });
+      lossSel.value = "OnlyProfitHyperOptLoss";
+      const updateDesc = () => {
+        const cur = LOSS_ITEMS.find(x => x.value === lossSel.value);
+        lossDesc.textContent = cur ? cur.desc : "";
+      };
+      lossSel.addEventListener('change', updateDesc);
+      updateDesc();
+    }
+
+    const jwSel = document.getElementById('jobworkers');
+    if (jwSel){
+      const max = Math.max(1, NB_CPU || 1);
+      for (let i=1;i<=max;i++){
+        const opt = document.createElement('option');
+        opt.value = String(i); opt.textContent = String(i);
+        jwSel.appendChild(opt);
+      }
+      jwSel.value = String(max);
+    }
   });
 
   async function refreshStrategies(){
@@ -559,17 +660,11 @@ def index():
   }
   async function refreshLists(){ await Promise.allSettled([refreshStrategies(), refreshJsons(), refreshGitPaths()]); }
 
-  // === Download: progression UI ===
   function collectTimeframes(){ return Array.from(document.querySelectorAll("input[name='tf']:checked")).map(b => b.value); }
   function setDownloadProgress(current, total){
-    const bar = document.getElementById('dlProgressBar');
-    const txt = document.getElementById('dlProgressText');
-    const pct = total > 0 ? Math.min(100, Math.floor(100*current/total)) : 0;
-    bar.style.width = pct + "%";
-    txt.textContent = `${current} / ${total} (${pct}%)`;
+    setBarProgress('dlProgressBar', 'dlProgressText', current, total);
   }
 
-  // === Lancements d'actions / SSE ===
   function startStream(action, extraParams={}){
     if(sources[action]) sources[action].close();
     lockFor(action);
@@ -585,33 +680,55 @@ def index():
     outEl.textContent = ""; stEl.textContent = "Exécution en cours…";
 
     const params = new URLSearchParams({ action, strategy, start_ymd, ...extraParams });
-    if(action === 'backtest' && end_ymd) params.set('end_ymd', end_ymd);
+    if (action === 'backtest' && end_ymd) params.set('end_ymd', end_ymd);
+    if (action === 'hyperopt' && end_ymd) params.set('end_ymd', end_ymd);
 
     const src = new EventSource('/run_stream?'+params.toString());
     sources[action] = src;
 
     if(action === 'download'){ setDownloadProgress(0, 0); }
+    if(action === 'hyperopt'){
+      const tot = parseInt(extraParams.epochs || '100', 10);
+      resetHyperoptProgress(tot);
+    }
+
+    // Affiche la commande exécutée
+    src.addEventListener('line', ev => {
+      const pre = document.getElementById('out-'+action);
+      const div = document.createElement('div');
+      div.className = 'muted';
+      div.textContent = ev.data;
+      pre.appendChild(div);
+      pre.appendChild(document.createTextNode("\\n"));
+      pre.scrollTop = pre.scrollHeight;
+    });
 
     src.addEventListener('meta', ev => {
       try{
         const meta = JSON.parse(ev.data);
-        if(action === 'download' && typeof meta.total_steps === 'number') setDownloadProgress(0, meta.total_steps);
+        if(action === 'download' && typeof meta.total_steps === 'number'){
+          setDownloadProgress(0, meta.total_steps);
+        }
+        if(action === 'hyperopt' && typeof meta.epochs_total === 'number'){
+          resetHyperoptProgress(meta.epochs_total);
+        }
       }catch(_){}
     });
 
-    // UI: on n'affiche pas les 'line' (seulement warn/err + result)
-    src.addEventListener('line', _ev => {});
-
-    // Progression Download
     src.addEventListener('progress', ev => {
       try{ const data = JSON.parse(ev.data); setDownloadProgress(data.current||0, data.total||0); }catch(_){}
     });
 
-    // WARN / ERR visibles
+    src.addEventListener('hopt_progress', ev => {
+      try{
+        const data = JSON.parse(ev.data);
+        setBarProgress('hoptProgressBar', 'hoptProgressText', data.current||0, data.total||0);
+      }catch(_){}
+    });
+
     src.addEventListener('warn', ev => appendColored(document.getElementById('out-'+action), "warn", ev.data));
     src.addEventListener('err',  ev => appendColored(document.getElementById('out-'+action), "err",  ev.data));
 
-    // RESULT (bloc résumé)
     src.addEventListener('result', ev => {
       const pre = document.getElementById('out-'+action);
       const div = document.createElement('div');
@@ -630,6 +747,7 @@ def index():
         const link = data.log_download ? ` — Log : <a href="${data.log_download}" target="_blank">ouvrir</a>` : '';
         stEl.innerHTML = `<span class="${cls}">${txt}</span>${link}`;
         if(action === 'download' && ok && data.total_steps){ setDownloadProgress(data.total_steps, data.total_steps); }
+        if(action === 'hyperopt' && typeof data.epochs_total === 'number'){ setBarProgress('hoptProgressBar','hoptProgressText', data.epochs_total, data.epochs_total); }
       }catch(_){
         stEl.innerHTML = `<span class="err">Terminé (parsing meta échoué)</span>`;
       }
@@ -642,6 +760,7 @@ def index():
       stEl.innerHTML = '<span class="err">Erreur de streaming</span>';
       src.close(); delete sources[action];
       unlockAll();
+      refreshLists();
     };
   }
 
@@ -658,7 +777,14 @@ def index():
   function startHyperopt(){
     const epochs = Math.max(1, parseInt(document.getElementById('epochs').value || '100', 10));
     const spaces = Array.from(document.querySelectorAll("input[name='spaces']:checked")).map(b => b.value);
-    startStream('hyperopt', { epochs:String(epochs), spaces: spaces.join(",") });
+    const loss = (document.getElementById('hyperoptloss')?.value || 'OnlyProfitHyperOptLoss').trim();
+    const jobw = (document.getElementById('jobworkers')?.value || '').trim();
+    startStream('hyperopt', {
+      epochs:String(epochs),
+      spaces: spaces.join(","),
+      hyperopt_loss: loss,
+      job_workers: jobw
+    });
   }
   function startApplyStrategy(){
     const chosen = document.getElementById('apply_json_sel')?.value || "";
@@ -687,14 +813,17 @@ def index():
         git_paths_list=read_git_paths_list(),
         json_files=json_files,
         json_files_apply=json_files_apply,
-        pair_count=pair_count
+        pair_count=pair_count,
+        nb_cpu=cpu_count_safe(),
+        loss_items_json=json.dumps([{"value":v, "label":lbl, "desc":desc} for (v,lbl,desc) in HYPEROPT_LOSSES], ensure_ascii=False)
     )
 
 @app.get("/run_stream")
 def run_stream():
     """
     Stream SSE par action.
-    UI: n'affiche que WARN/ERR, mais on envoie un évènement 'result' pour les blocs résultats.
+    - Hyperopt : sauvegarde le JSON, lance, renomme le JSON généré, puis restaure la sauvegarde.
+    - Backtest (si fichier .json sélectionné) : swap temporaire avec <strategy>.json puis restauration.
     """
     action    = (request.args.get("action") or "").strip()
     strategy  = (request.args.get("strategy") or DEFAULT_STRATEGY).strip()
@@ -714,6 +843,13 @@ def run_stream():
     spaces = [s for s in spaces_csv.split(",") if s] if spaces_csv else None
     if spaces == ["default"]:
         spaces = None
+
+    hyperopt_loss = (request.args.get("hyperopt_loss") or "").strip() or "OnlyProfitHyperOptLoss"
+    job_workers_param = (request.args.get("job_workers") or "").strip()
+    try:
+        job_workers = int(job_workers_param) if job_workers_param else None
+    except:
+        job_workers = None
 
     tfs_csv = (request.args.get("tfs") or "").strip()
     timeframes = [t for t in tfs_csv.split(",") if t] if tfs_csv else None
@@ -741,7 +877,7 @@ def run_stream():
         elif action == "backtest_bear":
             cmd = build_cmd("backtest_bear", strategy, start_ymd)
         elif action == "hyperopt":
-            cmd = build_cmd("hyperopt", strategy, start_ymd, epochs=epochs, spaces=spaces)
+            cmd = build_cmd("hyperopt", strategy, start_ymd, end_ymd=end_ymd, epochs=epochs, spaces=spaces, hyperopt_loss=hyperopt_loss, job_workers=job_workers)
         elif action == "apply_strategy":
             cmd = None
         else:
@@ -767,10 +903,19 @@ def run_stream():
         payload = {"current": prog_current, "total": total_steps_download}
         return sse_format("progress", json.dumps(payload))
 
+    # Regex de détection progression Hyperopt (Epoch + Optuna Trial)
+    epoch_patterns = [
+        re.compile(r'\bepoch\s*[:\- ]*\s*(\d+)\s*/\s*(\d+)\b', re.IGNORECASE),  # "Epoch 7/100"
+        re.compile(r'\b(\d+)\s*/\s*(\d+)\s*epochs?\b', re.IGNORECASE),          # "7/100 epochs"
+        re.compile(r'\bepoch[^\d]*(\d+)\b', re.IGNORECASE),                     # "Epoch 7"
+        re.compile(r'\btrial\s+(\d+)\b.*\b(finished|completed|complete|done)\b', re.IGNORECASE),  # "Trial 7 finished"
+        re.compile(r'\btrial\s+(\d+)\s*(?:of|/)\s*(\d+)\b', re.IGNORECASE),     # "Trial 7 of 100"
+    ]
+
     def generate():
         nonlocal prog_current
 
-        # Entête (la UI ignore 'line', mais on garde pour meta/cohérence)
+        # Entête / commande affichée
         if action == "git_push":
             cmd_str = f"git push in {git_path_single or '(none)'}"
         elif action == "apply_strategy":
@@ -785,6 +930,8 @@ def run_stream():
         meta = {"logfile": log_path, "cwd": PROJECT_DIR, "cmd": cmd_str}
         if action == "download":
             meta["total_steps"] = total_steps_download
+        if action == "hyperopt":
+            meta["epochs_total"] = epochs  # FIX: pas d'accès à request ici
         yield sse_format("meta", json.dumps(meta))
 
         rc = 0
@@ -798,7 +945,6 @@ def run_stream():
         sdir = strategies_dir()
         strat_json_path = os.path.join(sdir, f"{strategy}.json")
 
-        # Prépare fichier log
         with open(log_path, "w", encoding="utf-8", errors="replace") as f:
             f.write(header + "\n")
 
@@ -861,10 +1007,8 @@ def run_stream():
                     for raw in proc.stdout:
                         line = raw.rstrip("\r\n")
                         low = line.lower()
-                        # UI: WARN/ERR only
                         if is_warn_err(low):
                             yield sse_format("warn" if "warn" in low else "err", line)
-                        # Log: complet pour git
                         with open(log_path, "a", encoding="utf-8") as f: f.write(line + "\n")
                     code = proc.wait()
                     if code != 0:
@@ -873,12 +1017,37 @@ def run_stream():
         # === BACKTEST / BEAR / HYPEROPT ===
         elif is_backtest or is_backtest_bear or is_hyperopt:
             try:
+                # SWAP JSON si Backtest + fichier choisi
+                selected_json_path = os.path.join(sdir, bt_json) if (is_backtest and bt_json) else None
+                did_swap = False
+                moved_selected_to_strat = False
+                backup_bt_path = None
+
+                if is_backtest and selected_json_path and os.path.isfile(selected_json_path):
+                    if os.path.basename(selected_json_path) != f"{strategy}.json":
+                        if os.path.isfile(strat_json_path):
+                            backup_bt_path = strat_json_path + ".prebacktest.bak"
+                            shutil.move(strat_json_path, backup_bt_path)
+                        shutil.move(selected_json_path, strat_json_path)
+                        did_swap = True
+                        moved_selected_to_strat = True
+
+                # Commande réelle
                 if is_backtest:
                     cmd_local = build_cmd("backtest", strategy, start_ymd, end_ymd=end_ymd)
                 elif is_backtest_bear:
                     cmd_local = build_cmd("backtest_bear", strategy, start_ymd)
                 else:
-                    cmd_local = build_cmd("hyperopt", strategy, start_ymd, epochs=epochs, spaces=spaces)
+                    cmd_local = build_cmd("hyperopt", strategy, start_ymd, end_ymd=end_ymd, epochs=epochs, spaces=spaces, hyperopt_loss=hyperopt_loss, job_workers=job_workers)
+
+                # Sauvegarde AVANT Hyperopt
+                backup_hopt_path = None
+                if is_hyperopt and os.path.isfile(strat_json_path):
+                    backup_hopt_path = strat_json_path + ".prehyperopt.bak"
+                    try:
+                        shutil.copy2(strat_json_path, backup_hopt_path)
+                    except Exception as e:
+                        yield sse_format("warn", f"[HYPEROPT] Impossible de sauvegarder {strat_json_path}: {e}")
 
                 proc = subprocess.Popen(
                     cmd_local, cwd=PROJECT_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -889,26 +1058,68 @@ def run_stream():
                 yield sse_format("err", f"Impossible de démarrer le processus: {e}")
                 payload = {"returncode": 1, "log_download": ""}
                 yield sse_format("end", json.dumps(payload))
+                try:
+                    if is_backtest and 'did_swap' in locals() and did_swap:
+                        if moved_selected_to_strat and os.path.isfile(strat_json_path) and selected_json_path:
+                            shutil.move(strat_json_path, selected_json_path)
+                        if backup_bt_path and os.path.isfile(backup_bt_path):
+                            shutil.move(backup_bt_path, strat_json_path)
+                except Exception:
+                    pass
                 return
 
-            # Capture des résultats
+            # Capture résultats + progression
             result_buf = []
             seen_result = False
             start_token = "hyperopt results" if is_hyperopt else "result for strategy"
+
+            total_epochs = max(1, int(epochs))  # total figé = saisie UI
+            current_epoch = 0
 
             for raw in proc.stdout:
                 line = raw.rstrip("\r\n")
                 low = line.lower()
 
-                # Log complet pour ces actions
                 with open(log_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
 
-                # UI: WARN / ERR uniquement
                 if is_warn_err(low):
                     yield sse_format("warn" if "warn" in low else "err", line)
 
-                # Capture résultat
+                # Progress Hyperopt
+                if is_hyperopt:
+                    updated = False
+                    for rgx in epoch_patterns:
+                        m = rgx.search(line)
+                        if not m:
+                            continue
+                        try:
+                            if m.lastindex and m.lastindex >= 2:
+                                cur = int(m.group(1))  # on ignore le total log
+                                current_epoch = max(current_epoch, min(cur, total_epochs))
+                                updated = True
+                                break
+                            elif m.lastindex and m.lastindex >= 1:
+                                cur = int(m.group(1))
+                                current_epoch = max(current_epoch, min(cur, total_epochs))
+                                updated = True
+                                break
+                        except Exception:
+                            pass
+                    if not updated:
+                        t = re.search(r'\btrial\s+(\d+)\b', line, re.IGNORECASE)
+                        if t:
+                            try:
+                                cur = int(t.group(1))
+                                if cur > current_epoch:
+                                    current_epoch = min(cur, total_epochs)
+                                    updated = True
+                            except Exception:
+                                pass
+                    if updated:
+                        yield sse_format("hopt_progress", json.dumps({"current": current_epoch, "total": total_epochs}))
+
+                # Résultats
                 if not seen_result and start_token in low:
                     seen_result = True
                 if seen_result:
@@ -916,9 +1127,43 @@ def run_stream():
 
             rc = proc.wait()
 
-            # Envoie le bloc résultat à la fin (évènement dédié)
             if result_buf:
                 yield sse_format("result", "\n".join(result_buf))
+
+            # Post-traitement Hyperopt : nommage + restauration
+            if is_hyperopt:
+                end_label = end_ymd if end_ymd else "open"
+                final_name = f"{strategy}_{epochs}_{hyperopt_loss}_{start_ymd}_{end_label}.json"
+                final_path = unique_path(sdir, final_name)
+                try:
+                    if os.path.isfile(strat_json_path):
+                        shutil.move(strat_json_path, final_path)
+                        yield sse_format("result", f"[HYPEROPT] JSON enregistré : {os.path.basename(final_path)}")
+                    else:
+                        yield sse_format("warn", "[HYPEROPT] Aucun nouveau JSON trouvé à renommer.")
+                except Exception as e:
+                    yield sse_format("err", f"[HYPEROPT] Échec du renommage : {e}")
+                backup_hopt_path = strat_json_path + ".prehyperopt.bak"
+                if os.path.isfile(backup_hopt_path):
+                    try:
+                        shutil.move(backup_hopt_path, strat_json_path)
+                        yield sse_format("result", f"[HYPEROPT] Stratégie restaurée : {os.path.basename(strat_json_path)}")
+                    except Exception as e:
+                        yield sse_format("err", f"[HYPEROPT] Échec de restauration de la sauvegarde : {e}")
+                yield sse_format("hopt_progress", json.dumps({"current": total_epochs, "total": total_epochs}))
+
+            # Restauration Backtest
+            if is_backtest:
+                try:
+                    selected_json_path = os.path.join(sdir, bt_json) if bt_json else None
+                    if 'did_swap' in locals() and did_swap:
+                        if moved_selected_to_strat and os.path.isfile(strat_json_path) and selected_json_path:
+                            shutil.move(strat_json_path, selected_json_path)
+                        if backup_bt_path and os.path.isfile(backup_bt_path):
+                            shutil.move(backup_bt_path, strat_json_path)
+                        yield sse_format("result", "[BACKTEST] JSON restauré après exécution.")
+                except Exception as e:
+                    yield sse_format("err", f"[BACKTEST] Restauration échouée : {e}")
 
         # === DOWNLOAD (multi-TF) ===
         elif is_download:
@@ -946,16 +1191,13 @@ def run_stream():
                     line = raw.rstrip("\r\n")
                     low = line.lower()
 
-                    # Progression : basée sur "... Downloaded data for ...".
                     if "downloaded data for" in low:
                         if prog_current < total_steps_download:
                             prog_current += 1
                             yield emit_progress()
 
-                    # UI: WARN/ERR seulement
                     if is_warn_err(low):
                         yield sse_format("warn" if "warn" in low else "err", line)
-                        # Log Download: WARN/ERR seulement
                         with open(log_path, "a", encoding="utf-8") as f:
                             f.write(("WARN: " if "warn" in low else "ERR: ") + line + "\n")
 
@@ -970,6 +1212,8 @@ def run_stream():
         payload = {"returncode": rc, "log_download": log_download}
         if action == "download":
             payload["total_steps"] = total_steps_download
+        if action == "hyperopt":
+            payload["epochs_total"] = epochs
         yield sse_format("end", json.dumps(payload))
 
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
