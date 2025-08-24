@@ -28,6 +28,10 @@ project_root/
 ├── user_data/
 │   ├── config_base.json     # Config principale utilisée par toutes les actions
 │   ├── configs/             # Configs additionnelles (dont config_exchange.json)
+│	│	├── config_exchange.json
+│	│	├── config_secrets.json
+│	│	├── config_strategy.json
+│	│	├── ...
 │   └── strategies/          # Stratégies et résultats Hyperopt (.py / .json)
 │
 ├── log_app/                 # Logs générés par l’UI
@@ -36,6 +40,96 @@ project_root/
 
 - Les paires utilisées pour le download sont lues depuis :  
   `user_data/configs/config_exchange.json → pair_whitelist`.  
+
+## 📂 Fichiers
+
+- config_base.json
+```
+{
+  "bot_name": "eZ3KIEL",
+  "$schema": "https://schema.freqtrade.io/schema.json",
+
+  "stake_currency": "USDC",
+  "timeframe": "3m",
+  "trading_mode": "spot",
+
+  "pairlists": [
+    { "method": "StaticPairList" }
+  ],
+
+  "add_config_files": [
+    "configs/config_strategy.json",
+    "configs/config_freqai.json",
+    "configs/config_exchange.json",
+    "configs/config_secrets.json"
+  ]
+}
+```
+
+## 📂 Strategie
+
+- Doit contenir ce morceau de code sous la class :
+
+```
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        json_path = Path(__file__).resolve().parent / "eZ3_scalp3m.json"
+        if json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as f:
+                self.cfg = json.load(f)
+        else:
+            self.cfg = {}
+```
+
+## 📂 BOT Freqtrade
+
+- Bash check.sh :
+
+```
+#!/bin/sh
+
+set -e
+
+FT_STRAT=/home/debian/STRATS/FT_strat_live
+FT_CONFIG=/home/debian/CONFIG/FT_config_live
+FREQTRADE_HOME=/home/debian/freqtrade
+
+cd $FT_STRAT
+changed=0
+git pull | grep -q 'Already up to date.' && changed=1
+if [ $changed = 0 ]; then
+    git pull
+        rm -f $FREQTRADE_HOME/user_data/strategies/.py
+        cp -f $FT_STRAT/.py $FREQTRADE_HOME/user_data/strategies/
+        sudo systemctl restart freqtrade_spot.service
+        echo "updating NFO Strategy"
+
+else
+    echo "Up-to-date"
+fi
+
+cd $FT_CONFIG
+changed=0
+git pull | grep -q 'Already up to date.' && changed=1
+if [ $changed = 0 ]; then
+    git pull
+        rm -f $FREQTRADE_HOME/user_data/config/*
+        cp -f  $FT_CONFIG/configs/* $FREQTRADE_HOME/user_data/configs/
+        cp -rf $FT_CONFIG/* $FREQTRADE_HOME/user_data/
+        sudo systemctl restart freqtrade_spot.service
+        echo "updating NFO Strategy"
+
+else
+    echo "Up-to-date"
+fi
+```
+
+- Crontab :
+
+```
+* * * * * sudo /home/debian/check.sh > /home/debian/check.log
+```
 
 ---
 
@@ -56,7 +150,7 @@ project_root/
    pip install flask
    ```
 
-3. **Configurer** vos fichiers `user_data/config_base.json` et `user_data/configs/config_exchange.json`  
+3. **Configurer** vos fichiers `user_data/config_base.json` et `user_data/configs/config_exchange.json ...`  
    (ajoutez vos `pair_whitelist`, clés API, etc.).
 
 ---
