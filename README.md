@@ -85,10 +85,18 @@ project_root/
 Si ce projet vous aide, vous pouvez m’offrir un café (~3,50 USD) en crypto :  
 
 - **Bitcoin (BTC)** : ~0.000030 BTC  
-  👉 [Pay with BTC](bitcoin:0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a?amount=0.0000305&label=Pay%20me%20a%20coffee)  
+  👉 [Pay with BTC](bitcoin:bc1qukc8c3qhv04gxj3u9fawdtexx2nf0acmd8pspq?amount=0.0000305&label=Pay%20me%20a%20coffee)  
+  - Device: **BTC**  
+  - Network: **Native SegWit (bech32)**  
+  - Address: `bc1qukc8c3qhv04gxj3u9fawdtexx2nf0acmd8pspq`  
+
+---
 
 - **Ethereum (ETH)** : ~0.00074 ETH  
-  👉 [Pay with ETH](ethereum:0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a?value=740000000000000&label=Pay%20me%20a%20coffee)  
+  👉 [Pay with ETH](ethereum:0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a?amount=0.00074&label=Pay%20me%20a%20coffee)  
+  - Device: **ETH**  
+  - Network: **ERC20**  
+  - Address: `0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a`  
 
 🙏 Merci beaucoup !
 
