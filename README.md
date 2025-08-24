@@ -3,7 +3,8 @@
 Une interface web légère en **Flask** pour piloter **Freqtrade** sans ligne de commande.  
 Elle permet de gérer **les stratégies, les backtests, l’hyperopt, les téléchargements de données et le push Git** via un simple navigateur.
 
-<img width="1241" height="1056" alt="image" src="https://github.com/user-attachments/assets/79f075a2-ad79-4cff-97fa-b1aa05c78382" />
+<img width="1228" height="1178" alt="image" src="https://github.com/user-attachments/assets/5f0f3860-686e-4ea0-a142-3ec6dc3ea705" />
+
 
 
 ---
