@@ -40,6 +40,7 @@ project_root/
 ```
 - Créer des liens symboliques :  
   `entre votre GIT Configs et user_data/configs`.
+  
   `entre votre GIT strategies et user_data/strategies`. 
 
 - Les paires utilisées pour le download sont lues depuis :  
