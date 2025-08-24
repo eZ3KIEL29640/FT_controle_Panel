@@ -38,6 +38,9 @@ project_root/
 ├── log_app/                 # Logs générés par l’UI
 └── git_path.txt             # Liste des dépôts Git à utiliser pour “PUSH”
 ```
+- Créer des liens symboliques :  
+  `entre votre GIT Configs et user_data/configs`.
+  `entre votre GIT strategies et user_data/strategies`. 
 
 - Les paires utilisées pour le download sont lues depuis :  
   `user_data/configs/config_exchange.json → pair_whitelist`.  
