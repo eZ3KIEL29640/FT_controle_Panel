@@ -158,29 +158,4 @@ D:\work\my-strats   <- sera présélectionné
 
 ---
 
-## Déploiement Git du projet
-
-Initialisation :
-```bash
-git init
-git add app.py README.md
-git commit -m "feat: Freqtrade control panel with hyperopt/backtest/apply/git"
-```
-
-Remote :
-```bash
-git branch -M main
-git remote add origin <URL_DU_REPO>
-git push -u origin main
-```
-
-Mises à jour :
-```bash
-git add -A
-git commit -m "chore: updates"
-git push
-```
-
----
-
 **Bon trading & bonnes optimisations !** 🚀
