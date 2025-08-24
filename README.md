@@ -1,98 +1,92 @@
-# Freqtrade Control Panel (Flask)
+# 📊 Freqtrade Control Panel (Flask UI)
 
-Ce projet fournit une interface web légère (Flask) permettant de piloter
-**Freqtrade** (téléchargement des données, backtests, hyperopt, gestion
-des stratégies et push Git).\
-Il simplifie les tâches récurrentes via une interface conviviale avec
-suivi en direct (SSE).
+Une interface web légère en **Flask** pour piloter **Freqtrade** sans ligne de commande.  
+Elle permet de gérer **les stratégies, les backtests, l’hyperopt, les téléchargements de données et le push Git** via un simple navigateur.
 
-------------------------------------------------------------------------
+---
 
 ## 🚀 Utilité
 
--   Lancer des **backtests** et des **hyperopt** sans ligne de commande.
--   Appliquer facilement un fichier `.json` optimisé à une stratégie.
--   Télécharger les données historiques pour plusieurs timeframes (`3m`,
-    `1h`, `1d`).
--   Gestion intégrée de **Git** (add/commit/push automatique).
--   Logs détaillés et accessibles depuis l'interface.
+- Démarrer rapidement un **download de données** (multi-timeframes, progression avec barre).  
+- Lancer des **backtests** ou un **backtest BEAR** directement depuis l’UI.  
+- Exécuter un **hyperopt** avec gestion des `spaces` (all / default / personnalisés).  
+- **Appliquer** un JSON hyperopté à une stratégie donnée.  
+- **Pousser sur Git** vos modifications (add/commit/push).  
+- Visualiser et télécharger les **logs générés**.  
 
-------------------------------------------------------------------------
+---
+
+## 📂 Répertoires
+
+```
+project_root/
+│
+├── app.py                  # Application Flask (UI principale)
+├── user_data/
+│   ├── config_base.json     # Config principale utilisée par toutes les actions
+│   ├── configs/             # Configs additionnelles (dont config_exchange.json)
+│   └── strategies/          # Stratégies et résultats Hyperopt (.py / .json)
+│
+├── log_app/                 # Logs générés par l’UI
+└── git_path.txt             # Liste des dépôts Git à utiliser pour “PUSH”
+```
+
+- Les paires utilisées pour le download sont lues depuis :  
+  `user_data/configs/config_exchange.json → pair_whitelist`.  
+
+---
 
 ## ⚙️ Installation
 
-1.  Cloner votre dépôt (ou placer ce projet dans votre répertoire
-    Freqtrade) :
+1. **Cloner** votre repo contenant Freqtrade et cette UI.
+   ```bash
+   git clone https://github.com/votre-repo/freqtrade-ui.git
+   cd freqtrade-ui
+   ```
 
-    ``` bash
-    git clone https://github.com/votre-utilisateur/votre-repo.git
-    cd votre-repo
-    ```
+2. **Créer un venv** Python et installer Flask :
+   ```bash
+   python -m venv .venv
+   .\.venv\Scripts\activate    # sous Windows
+   # ou source .venv/bin/activate sous Linux/Mac
 
-2.  Créer un environnement virtuel et installer les dépendances :
+   pip install flask
+   ```
 
-    ``` bash
-    python -m venv .venv
-    .venv\Scripts\activate     # sous Windows
-    # source .venv/bin/activate  # sous Linux/Mac
-    pip install flask
-    ```
+3. **Configurer** vos fichiers `user_data/config_base.json` et `user_data/configs/config_exchange.json`  
+   (ajoutez vos `pair_whitelist`, clés API, etc.).
 
-3.  Vérifier que **Freqtrade** est bien installé dans le projet (au
-    besoin) :
+---
 
-    ``` bash
-    pip install freqtrade
-    ```
+## ▶️ Utilisation
 
-4.  (Optionnel) Créez un fichier `git_path.txt` listant vos dépôts Git à
-    piloter :
+1. Démarrer l’UI :
+   ```bash
+   .venv\Scripts\python.exe app.py
+   ```
+   (par défaut sur [http://127.0.0.1:5000](http://127.0.0.1:5000))
 
-    ``` txt
-    # Exemple de contenu :
-    C:/Users/Vous/Documents/freqtrade-strategies
-    C:/Users/Vous/Documents/freqtrade-config
-    ```
+2. Ouvrir le navigateur : vous aurez accès à :
+   - **Strategy** : choix du script, dates, compteur `pair_whitelist`.  
+   - **Download** : choix des timeframes, option `--erase`, barre de progression.  
+   - **Backtest** / **Backtest BEAR** : exécution avec résultats affichés.  
+   - **Hyperopt** : epochs + choix des spaces avec contraintes intelligentes.  
+   - **Apply Strategy Hyperopt** : appliquer un `.json` optimisé.  
+   - **Git PUSH** : commit + push automatique.  
+   - **Logs** : consultation en direct.  
 
-------------------------------------------------------------------------
+3. Tous les résultats et erreurs apparaissent dans les panneaux de sortie.  
+   Les logs sont également sauvegardés dans `log_app/`.
 
-## 🖥️ Utilisation
+---
 
-1.  Lancer l'application Flask :
+## ☕ Pay me a coffee
 
-    ``` bash
-    .venv\Scripts\python.exe app.py
-    ```
+Si ce projet vous aide, vous pouvez me soutenir en crypto :
 
-    Par défaut, le serveur démarre sur `http://127.0.0.1:5000`.
+- **Ethereum (ETH)** : `0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a`
+- **Bitcoin (BTC)** : `13dt3a2QL5hkKUDQC7rNaAKK7RJUcuuTM4`
 
-2.  Depuis votre navigateur, vous pourrez :
+🙏 Merci beaucoup !
 
-    -   Sélectionner une stratégie et une période.\
-    -   Lancer un **Download data**, **Backtest**, **Backtest BEAR** ou
-        un **Hyperopt**.\
-    -   Appliquer un fichier `.json` optimisé via **Apply Strategy**.\
-    -   Faire un **Git Push** automatique du répertoire choisi.\
-    -   Consulter les **logs** en direct.
-
-------------------------------------------------------------------------
-
-## 📂 Structure attendue
-
-    .
-    ├── app.py               # Interface Flask
-    ├── git_path.txt         # Liste des chemins Git à gérer (optionnel)
-    ├── user_data/
-    │   └── strategies/      # Vos stratégies .py et fichiers .json
-    └── log_app/             # Logs générés automatiquement
-
-------------------------------------------------------------------------
-
-## ✅ Notes
-
--   Pendant un **Hyperopt**, les boutons **Backtest** et **Backtest
-    BEAR** sont désactivés, et inversement.\
--   Les listes de stratégies, `.json` et dépôts Git sont mises à jour
-    automatiquement à la fin de chaque action.\
--   Les logs sont sauvegardés dans `log_app/` et consultables via
-    l'onglet **Logs**.
+---
