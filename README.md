@@ -82,10 +82,13 @@ project_root/
 
 ## ☕ Pay me a coffee
 
-Si ce projet vous aide, vous pouvez me soutenir en crypto :
+Si ce projet vous aide, vous pouvez m’offrir un café (~3,50 USD) en crypto :  
 
-- **Ethereum (ETH)** : `0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a`
-- **Bitcoin (BTC)** : `13dt3a2QL5hkKUDQC7rNaAKK7RJUcuuTM4`
+- **Bitcoin (BTC)** : ~0.000030 BTC  
+  👉 [Pay with BTC](bitcoin:0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a?amount=0.0000305&label=Pay%20me%20a%20coffee)  
+
+- **Ethereum (ETH)** : ~0.00074 ETH  
+  👉 [Pay with ETH](ethereum:0x2e2c095f7cc235eb485cca0dbe2b0cb9d923761a?value=740000000000000&label=Pay%20me%20a%20coffee)  
 
 🙏 Merci beaucoup !
 
